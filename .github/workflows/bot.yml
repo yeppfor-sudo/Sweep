@@ -1,7 +1,7 @@
-name: MEXC Bearish CHoCH 15m TOP Gainers
+name: BEARISH CHoCH 15m 48H TOP REAL TIME PHOTO
 on:
   schedule:
-    - cron: '1,16,31,46 * * * *'  # 1 min after every 15m close
+    - cron: '1,16,31,46 * * * *'
   workflow_dispatch:
 jobs:
   scan:
