@@ -1,7 +1,7 @@
-name: MEXC CHoCH Setup Bot
+name: MEXC CHoCH 15m Real Time
 on:
   schedule:
-    - cron: '5 */2 * * *'  # Every 2h at 05 = after candle close
+    - cron: '1,16,31,46 * * * *'  # Every 15m + 1 min delay = after 15m candle close
   workflow_dispatch:
 jobs:
   scan:
@@ -12,7 +12,15 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install ccxt pandas requests matplotlib pytz
-      - run: python bot.py
+      - name: Run 15m CHoCH scan
+        run: python bot.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+      - name: Save history
+        run: |
+          git config user.name "bot"
+          git config user.email "bot@bot.com"
+          git add alerts_history.json || true
+          git commit -m "update history" || true
+          git push || true
