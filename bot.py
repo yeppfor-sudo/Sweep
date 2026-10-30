@@ -9,24 +9,35 @@ CHAT = os.getenv("CHAT_ID")
 PKT = pytz.timezone('Asia/Karachi')
 HIST_FILE = "alerts_history.json"
 FRACTAL_LEN = 7
-REQUIRE_BODY = True
-COOLDOWN = 1  # 1 hour cooldown for 15m TF
+COOLDOWN = 2  # hours
+TOP_GAINERS = 30  # Scan bearish CHoCH only in 24h top 30 gainers
+
+# ========= BLOCK BTC ETH METALS STOCKS ETFs =========
+BLOCK_ALL = {
+'BTC','ETH','SOL','BNB','TRX','XRP','ADA','DOGE','AVAX','DOT','LINK','LTC','BCH','XLM','ETC','HBAR','APT','NEAR','UNI','FIL','ARB','OP','ATOM','MATIC','POL','TON','SHIB','PEPE','CRO','LEO','OKB','BGB','SUI','LDO','RNDR','TAO','FET','WIF','ENA','JUP','SEI','TIA','ONDO','W','PYTH','STRK','JTO','ENS',
+'TLT','TLH','IEF','SHY','INDA','EWJ','EWA','EWZ','KWEB','QQQ','SPY','DIA','IWM','EWW','EWC','MCHI','INDY','STRC','OURA','SPX','SPX500','NAS100','DJI','US30','UK100','GER40','RKLB','NVDA','AAPL','TSLA','MSFT','STOCK','ETF','OIL','SILVER','GOLD','XAU','XAG','XAUT','PAXG','KAU','TRY','EUR','GBP','JPY','AUD','CAD','CHF','NZD','USDC','BUSD','FDUSD','TUSD','DAI','USDE','USDP','GUSD','PYUSD','EURI','EURC','XLU','XLP','XLE','XLF','XLB','XLI','XLY','XLK','XLV','GLD','SLV','GDX','GDXJ','COPX','LIT','URA','SQQQ','TQQQ','SOXS','SOXL','SPXS','SPXL','SKDD','XSOXS','XSOX','LABU','LABD','TECL','TECS','UPRO','SPXU','TZA','TNA','FAS','FAZ','SDOW','UDOW',
+'LEAD','COPPER','NICKEL','ZINC','TIN','ALUM','ALUMINIUM','ALUMINUM','CORN','SOY','WHEAT','COTTON','SUGAR','COFFEE','COCOA','GAS'
+}
+
+def is_valid_crypto(sym):
+    if not sym.endswith('USDT:USDT'): return False
+    base = sym.split('/')[0].upper()
+    if any(x in base for x in ['STOCK','ETF','SOX','QQQ','SPX','DJI','SKDD','XSOX','TLT','SPY','DIA','GDX','XAU','PAXG','GOLD','XAG','LEAD','COPPER','NICKEL','ZINC','TIN','GLD','SLV','ALUM']): return False
+    if base in BLOCK_ALL: return False
+    if len(base) < 2 or len(base) > 6: return False
+    if any(c.isdigit() for c in base): return False
+    if not base.isalpha(): return False
+    return True
 
 def send_msg(t):
-    try:
-        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            json={"chat_id":CHAT,"text":t,"parse_mode":"Markdown"}, timeout=20)
-        print(t)
-    except Exception as e:
-        print(f"Send error: {e}")
+    try: requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", json={"chat_id":CHAT,"text":t,"parse_mode":"Markdown"}, timeout=20)
+    except: pass
 
 def send_photo(p,c):
     try:
         with open(p,'rb') as f:
-            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-                data={"chat_id":CHAT,"caption":c,"parse_mode":"Markdown"}, files={"photo":f}, timeout=30)
-    except Exception as e:
-        print(f"Photo error: {e}")
+            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto", data={"chat_id":CHAT,"caption":c,"parse_mode":"Markdown"}, files={"photo":f}, timeout=30)
+    except: pass
 
 def load_hist():
     try:
@@ -35,18 +46,6 @@ def load_hist():
 
 def save_hist(d):
     with open(HIST_FILE,'w') as f: json.dump(d,f)
-
-exchange = ccxt.mexc({'enableRateLimit': True, 'options':{'defaultType':'swap'}})
-exchange.load_markets()
-
-def fetch_15m(sym):
-    try:
-        ohlcv = exchange.fetch_ohlcv(sym, '15m', limit=500)
-        df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
-        df['time'] = pd.to_datetime(df['t'], unit='ms', utc=True)
-        return df
-    except:
-        return None
 
 def is_pivot_high(df, idx, length):
     if idx < length or idx >= len(df)-length: return False
@@ -58,7 +57,7 @@ def is_pivot_low(df, idx, length):
     window = df['l'].iloc[idx-length:idx+length+1]
     return df['l'].iloc[idx] == window.min()
 
-def detect_choch(df):
+def detect_bearish_choch_only(df):
     if len(df) < 100: return None
     upperLevel = None
     lowerLevel = None
@@ -74,65 +73,52 @@ def detect_choch(df):
         if is_pivot_low(df, i, FRACTAL_LEN):
             lowerLevel = float(df['l'].iloc[i])
             lowerBroken = False
-        
-        if upperLevel is None or lowerLevel is None:
-            continue
+        if upperLevel is None or lowerLevel is None: continue
             
         close = float(df['c'].iloc[i])
+        low = float(df['l'].iloc[i])
         
-        breakUp = False
+        # Only bearish break
         breakDown = False
-        if not upperBroken and upperLevel:
-            if close > upperLevel and float(df['c'].iloc[i-1]) <= upperLevel:
-                breakUp = True
         if not lowerBroken and lowerLevel:
             if close < lowerLevel and float(df['c'].iloc[i-1]) >= lowerLevel:
                 breakDown = True
         
-        if breakUp:
-            upperBroken = True
-            if marketDirection == -1:
-                choch_events.append({
-                    'type': 'BULL_CHOCH',
-                    'bar': i,
-                    'price': close,
-                    'upper': upperLevel,
-                    'lower': lowerLevel,
-                    'eq': (float(df['h'].iloc[i])+lowerLevel)/2,
-                    'rangeTop': float(df['h'].iloc[i]),
-                    'rangeBottom': lowerLevel,
-                    'fib_top': lowerLevel + (float(df['h'].iloc[i])-lowerLevel)*0.618,
-                    'fib_bot': lowerLevel + (float(df['h'].iloc[i])-lowerLevel)*0.382,
-                })
-            marketDirection = 1
-            
         if breakDown:
             lowerBroken = True
-            if marketDirection == 1:
+            bearChoch = (marketDirection == 1)  # Was bullish, now breaking down = BEAR CHoCH
+            if bearChoch:
+                rangeTop = upperLevel
+                rangeBottom = low
+                eq = (rangeTop + rangeBottom)/2
                 choch_events.append({
                     'type': 'BEAR_CHOCH',
                     'bar': i,
                     'price': close,
                     'upper': upperLevel,
                     'lower': lowerLevel,
-                    'eq': (upperLevel+float(df['l'].iloc[i]))/2,
-                    'rangeTop': upperLevel,
-                    'rangeBottom': float(df['l'].iloc[i]),
-                    'fib_top': upperLevel - (upperLevel-float(df['l'].iloc[i]))*0.382,
-                    'fib_bot': upperLevel - (upperLevel-float(df['l'].iloc[i]))*0.618,
+                    'eq': eq,
+                    'rangeTop': rangeTop,
+                    'rangeBottom': rangeBottom,
+                    'fib_top': rangeTop - (rangeTop-rangeBottom)*0.382,
+                    'fib_bot': rangeTop - (rangeTop-rangeBottom)*0.618,
                 })
             marketDirection = -1
+        
+        # Track bullish breaks only for direction, no event
+        if not upperBroken and upperLevel:
+            if close > upperLevel and float(df['c'].iloc[i-1]) <= upperLevel:
+                upperBroken = True
+                marketDirection = 1
     
-    if not choch_events:
-        return None
+    if not choch_events: return None
     last_event = choch_events[-1]
-    # MUST BE PREVIOUS CLOSED CANDLE - bar = len(df)-2 (previous closed)
-    # Current forming is len(df)-1, so previous closed is len(df)-2
-    if last_event['bar'] != len(df)-2:
-        return None
+    # Must be previous closed candle (len-2), not older than 3 bars
+    if last_event['bar'] < len(df)-3: return None
+    if last_event['bar'] != len(df)-2: return None  # STRICT previous closed
     return last_event
 
-def draw_choch(df, sym, sig):
+def draw_choch(df, sym, sig, exn, gain24):
     fig, ax = plt.subplots(figsize=(13,6), facecolor='black')
     ax.set_facecolor('black')
     view = df.tail(70).copy()
@@ -140,17 +126,13 @@ def draw_choch(df, sym, sig):
         col='#089981' if r['c']>=r['o'] else '#f23645'
         ax.plot([i,i],[r['l'],r['h']],color=col,lw=1)
         ax.plot([i,i],[r['o'],r['c']],color=col,lw=4)
-    if sig.get('upper'):
-        ax.axhline(sig['upper'], color='gray', ls=':', lw=1)
-    if sig.get('lower'):
-        ax.axhline(sig['lower'], color='gray', ls=':', lw=1)
-    if sig['type']=='BULL_CHOCH':
-        ax.axhspan(sig['rangeBottom'], sig['rangeTop'], color='#089981', alpha=0.15)
-        ax.axhspan(sig['fib_bot'], sig['fib_top'], color='#089981', alpha=0.35)
-    else:
-        ax.axhspan(sig['rangeBottom'], sig['rangeTop'], color='#f23645', alpha=0.15)
-        ax.axhspan(sig['fib_bot'], sig['fib_top'], color='#f23645', alpha=0.35)
-    ax.set_title(f"{sym} 15m {sig['type']} {sig['price']:.6f} PKT {datetime.now(PKT).strftime('%H:%M')}", color='white')
+    ax.axhline(sig['lower'], color='gray', ls=':', lw=1, label=f"BLVL Low {sig['lower']:.5f}")
+    ax.axhline(sig['upper'], color='gray', ls=':', lw=1)
+    ax.axhspan(sig['rangeBottom'], sig['rangeTop'], color='#f23645', alpha=0.15)
+    ax.axhline(sig['eq'], color='#f23645', ls='--', lw=1, label=f"EQ {sig['eq']:.5f}")
+    ax.axhspan(sig['fib_bot'], sig['fib_top'], color='#f23645', alpha=0.35, label="Sell Zone 0.382-0.618")
+    ax.set_title(f"{sym} {exn} 15m BEAR_CHoCH | 24h {gain24:.1f}% | {sig['price']:.6f}", color='white', fontweight='bold')
+    ax.legend(facecolor='black', labelcolor='white', fontsize=7)
     ax.grid(alpha=0.1)
     plt.tight_layout()
     path=f"chart_{sym.replace('/','')}_15m.png"
@@ -158,35 +140,69 @@ def draw_choch(df, sym, sig):
     plt.close()
     return path
 
+EXS = [
+    ('BINANCE', ccxt.binanceusdm, {'enableRateLimit': True}),
+    ('MEXC', ccxt.mexc, {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}),
+    ('OKX', ccxt.okx, {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}),
+    ('GATE', ccxt.gate, {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}),
+    ('BITGET', ccxt.bitget, {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}),
+]
+
 hist=load_hist()
-syms=[s for s in exchange.markets if s.endswith('/USDT:USDT')]
-try:
-    tickers=exchange.fetch_tickers()
-    syms=[s for s in syms if tickers.get(s,{}).get('quoteVolume',0)>300_000]
-except: pass
-syms=syms[:150]
-found=0
 now=datetime.now(PKT)
+send_msg(f"🚀 *Bearish CHoCH 15m Scan Started* - TOP {TOP_GAINERS} 24h Gainers | {now.strftime('%H:%M PKT')}")
+total_found=0
 
-for sym in syms:
-    if sym in hist and time.time()-hist[sym] < COOLDOWN*3600:
+for exn, cls, opts in EXS:
+    try:
+        ex=cls(opts); ex.load_markets()
+        syms=[s for s in ex.markets if is_valid_crypto(s)]
+        # Get 24h top gainers
+        try:
+            tickers=ex.fetch_tickers()
+        except:
+            continue
+        gainers=[]
+        for sym in syms:
+            t=tickers.get(sym)
+            if not t: continue
+            ch = t.get('percentage',0)
+            vol = t.get('quoteVolume',0)
+            if ch is None: continue
+            if vol < 300_000: continue
+            gainers.append((sym, ch))
+        gainers.sort(key=lambda x: x[1], reverse=True)
+        top=gainers[:TOP_GAINERS]
+        if not top: continue
+        txt = ", ".join([f"{s.split('/')[0]} {c:.1f}%" for s,c in top[:8]])
+        send_msg(f"🏆 *{exn} 24H TOP {TOP_GAINERS}:* {txt}")
+
+        for sym, ch24 in top:
+            base=sym.split('/')[0]
+            key=f"{exn}_{base}"
+            if key in hist and time.time()-hist[key] < COOLDOWN*3600: continue
+            try:
+                ohlcv=ex.fetch_ohlcv(sym,'15m',limit=500)
+                if not ohlcv or len(ohlcv)<100: continue
+                df=pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
+                df['time']=pd.to_datetime(df['t'], unit='ms', utc=True)
+                sig=detect_bearish_choch_only(df)
+                if not sig: continue
+                chart=draw_choch(df,sym,sig,exn,ch24)
+                cap=f"🔴 *BEAR_CHOCH 15m*\n\n*Pair:* {sym} {exn}\n*24h Gainer:* `{ch24:.2f}%` TOP {TOP_GAINERS}\n*CHoCH Price:* `{sig['price']:.6f}`\n*BLVL Break:* `{sig['lower']:.6f}`\n*EQ:* `{sig['eq']:.6f}`\n*Sell Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* Above `{sig['rangeTop']:.6f}`\n*Time:* {now.strftime('%Y-%m-%d %I:%M %p')} PKT\n*SHORT Setup - Previous Closed Candle*"
+                send_photo(chart,cap)
+                hist[key]=time.time()
+                save_hist(hist)
+                total_found+=1
+                time.sleep(1)
+            except Exception as e:
+                print(f"{exn} {sym} {e}")
+                continue
+    except Exception as e:
+        print(f"{exn} error {e}")
         continue
-    df=fetch_15m(sym)
-    if df is None or len(df)<100: continue
-    sig=detect_choch(df)
-    if not sig: continue
-    
-    chart=draw_choch(df,sym,sig)
-    if 'BULL' in sig['type']:
-        cap=f"🟢 *{sig['type']}*\n\n*Pair:* {sym}\n*TF:* 15m CLOSED\n*Price:* `{sig['price']:.6f}`\n*BLVL:* `{sig['upper']:.6f}`\n*Buy Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeBottom']:.6f}`\n*Candle Close:* {now.strftime('%Y-%m-%d %I:%M %p')} PKT"
-    else:
-        cap=f"🔴 *{sig['type']}*\n\n*Pair:* {sym}\n*TF:* 15m CLOSED\n*Price:* `{sig['price']:.6f}`\n*BLVL:* `{sig['lower']:.6f}`\n*Sell Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Candle Close:* {now.strftime('%Y-%m-%d %I:%M %p')} PKT"
-    
-    send_photo(chart,cap)
-    hist[sym]=time.time()
-    save_hist(hist)
-    found+=1
-    time.sleep(1)
 
-if found==0:
-    print("No CHoCH on 15m closed candle")
+if total_found==0:
+    send_msg(f"*patience* No Bearish CHoCH in 24h TOP {TOP_GAINERS} gainers - 15m scan done")
+else:
+    send_msg(f"✅ *Done* Found {total_found} Bearish CHoCH in TOP gainers")
