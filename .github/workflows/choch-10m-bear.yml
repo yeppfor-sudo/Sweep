@@ -1,0 +1,41 @@
+name: 10m Bear CHoCH Futures Scanner
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'  # Every 10 minutes
+  workflow_dispatch:  # Manual run button
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          pip install ccxt pandas requests pytz matplotlib
+
+      - name: Run 10m Bear CHoCH Scanner
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          MEXC_API_KEY: ${{ secrets.MEXC_API_KEY }}
+          MEXC_SECRET: ${{ secrets.MEXC_SECRET }}
+        run: |
+          python choch_10m_bear_futures.py
+
+      - name: Save history
+        if: always()
+        run: |
+          git config --global user.name "bot"
+          git config --global user.email "bot@bot.com"
+          git add alerts_history_bear10m_fut.json || true
+          git diff --quiet && git diff --staged --quiet || git commit -m "update choch history" || true
+          git push || true
