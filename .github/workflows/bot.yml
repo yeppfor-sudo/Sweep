@@ -1,7 +1,7 @@
-name: MEXC CHoCH 15m Real Time
+name: MEXC Bearish CHoCH 15m TOP Gainers
 on:
   schedule:
-    - cron: '1,16,31,46 * * * *'  # Every 15m + 1 min delay = after 15m candle close
+    - cron: '1,16,31,46 * * * *'  # 1 min after every 15m close
   workflow_dispatch:
 jobs:
   scan:
@@ -12,8 +12,7 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install ccxt pandas requests matplotlib pytz
-      - name: Run 15m CHoCH scan
-        run: python bot.py
+      - run: python bot.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
