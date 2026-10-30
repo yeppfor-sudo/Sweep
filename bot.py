@@ -8,19 +8,25 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT = os.getenv("CHAT_ID")
 PKT = pytz.timezone('Asia/Karachi')
 HIST_FILE = "alerts_history.json"
-TIMEFRAMES = ['15m']  # ONLY 15M
 FRACTAL_LEN = 7
 REQUIRE_BODY = True
-COOLDOWN = 24
+COOLDOWN = 1  # 1 hour cooldown for 15m TF
 
 def send_msg(t):
-    requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        json={"chat_id":CHAT,"text":t,"parse_mode":"Markdown"}, timeout=20)
+    try:
+        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            json={"chat_id":CHAT,"text":t,"parse_mode":"Markdown"}, timeout=20)
+        print(t)
+    except Exception as e:
+        print(f"Send error: {e}")
 
 def send_photo(p,c):
-    with open(p,'rb') as f:
-        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data={"chat_id":CHAT,"caption":c,"parse_mode":"Markdown"}, files={"photo":f}, timeout=30)
+    try:
+        with open(p,'rb') as f:
+            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+                data={"chat_id":CHAT,"caption":c,"parse_mode":"Markdown"}, files={"photo":f}, timeout=30)
+    except Exception as e:
+        print(f"Photo error: {e}")
 
 def load_hist():
     try:
@@ -33,9 +39,8 @@ def save_hist(d):
 exchange = ccxt.mexc({'enableRateLimit': True, 'options':{'defaultType':'swap'}})
 exchange.load_markets()
 
-def fetch_tf(sym, tf):
+def fetch_15m(sym):
     try:
-        # ONLY 15M - direct fetch
         ohlcv = exchange.fetch_ohlcv(sym, '15m', limit=500)
         df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
         df['time'] = pd.to_datetime(df['t'], unit='ms', utc=True)
@@ -74,120 +79,81 @@ def detect_choch(df):
             continue
             
         close = float(df['c'].iloc[i])
-        high = float(df['h'].iloc[i])
-        low = float(df['l'].iloc[i])
         
         breakUp = False
         breakDown = False
         if not upperBroken and upperLevel:
-            if REQUIRE_BODY:
-                if close > upperLevel:
-                    if float(df['c'].iloc[i-1]) <= upperLevel:
-                        breakUp = True
-            else:
-                if high > upperLevel:
-                    breakUp = True
-        
+            if close > upperLevel and float(df['c'].iloc[i-1]) <= upperLevel:
+                breakUp = True
         if not lowerBroken and lowerLevel:
-            if REQUIRE_BODY:
-                if close < lowerLevel:
-                    if float(df['c'].iloc[i-1]) >= lowerLevel:
-                        breakDown = True
-            else:
-                if low < lowerLevel:
-                    breakDown = True
+            if close < lowerLevel and float(df['c'].iloc[i-1]) >= lowerLevel:
+                breakDown = True
         
         if breakUp:
             upperBroken = True
-            bullChoch = (marketDirection == -1)
-            bullBos = (marketDirection == 1)
-            if bullChoch:
-                rangeBottom = lowerLevel
-                rangeTop = high
-                eq = (rangeTop + rangeBottom)/2
+            if marketDirection == -1:
                 choch_events.append({
                     'type': 'BULL_CHOCH',
                     'bar': i,
                     'price': close,
                     'upper': upperLevel,
                     'lower': lowerLevel,
-                    'eq': eq,
-                    'rangeTop': rangeTop,
-                    'rangeBottom': rangeBottom,
-                    'fib_top': rangeBottom + (rangeTop-rangeBottom)*0.618,
-                    'fib_bot': rangeBottom + (rangeTop-rangeBottom)*0.382,
+                    'eq': (float(df['h'].iloc[i])+lowerLevel)/2,
+                    'rangeTop': float(df['h'].iloc[i]),
+                    'rangeBottom': lowerLevel,
+                    'fib_top': lowerLevel + (float(df['h'].iloc[i])-lowerLevel)*0.618,
+                    'fib_bot': lowerLevel + (float(df['h'].iloc[i])-lowerLevel)*0.382,
                 })
-            elif bullBos:
-                choch_events.append({'type':'BULL_BOS','bar':i,'price':close})
             marketDirection = 1
             
         if breakDown:
             lowerBroken = True
-            bearChoch = (marketDirection == 1)
-            bearBos = (marketDirection == -1)
-            if bearChoch:
-                rangeTop = upperLevel
-                rangeBottom = low
-                eq = (rangeTop + rangeBottom)/2
+            if marketDirection == 1:
                 choch_events.append({
                     'type': 'BEAR_CHOCH',
                     'bar': i,
                     'price': close,
                     'upper': upperLevel,
                     'lower': lowerLevel,
-                    'eq': eq,
-                    'rangeTop': rangeTop,
-                    'rangeBottom': rangeBottom,
-                    'fib_top': rangeTop - (rangeTop-rangeBottom)*0.382,
-                    'fib_bot': rangeTop - (rangeTop-rangeBottom)*0.618,
+                    'eq': (upperLevel+float(df['l'].iloc[i]))/2,
+                    'rangeTop': upperLevel,
+                    'rangeBottom': float(df['l'].iloc[i]),
+                    'fib_top': upperLevel - (upperLevel-float(df['l'].iloc[i]))*0.382,
+                    'fib_bot': upperLevel - (upperLevel-float(df['l'].iloc[i]))*0.618,
                 })
-            elif bearBos:
-                choch_events.append({'type':'BEAR_BOS','bar':i,'price':close})
             marketDirection = -1
     
     if not choch_events:
         return None
     last_event = choch_events[-1]
-    if last_event['bar'] < len(df)-3:
+    # MUST BE PREVIOUS CLOSED CANDLE - bar = len(df)-2 (previous closed)
+    # Current forming is len(df)-1, so previous closed is len(df)-2
+    if last_event['bar'] != len(df)-2:
         return None
-    if 'CHOCH' not in last_event['type']:
-        return None
-    
     return last_event
 
-def draw_choch(df, sym, tf, sig):
+def draw_choch(df, sym, sig):
     fig, ax = plt.subplots(figsize=(13,6), facecolor='black')
     ax.set_facecolor('black')
     view = df.tail(70).copy()
-    x = range(len(view))
     for i,(_,r) in enumerate(view.iterrows()):
         col='#089981' if r['c']>=r['o'] else '#f23645'
         ax.plot([i,i],[r['l'],r['h']],color=col,lw=1)
         ax.plot([i,i],[r['o'],r['c']],color=col,lw=4)
     if sig.get('upper'):
-        ax.axhline(sig['upper'], color='gray', ls=':', lw=1, label=f"BLVL High {sig['upper']:.5f}")
+        ax.axhline(sig['upper'], color='gray', ls=':', lw=1)
     if sig.get('lower'):
-        ax.axhline(sig['lower'], color='gray', ls=':', lw=1, label=f"BLVL Low {sig['lower']:.5f}")
+        ax.axhline(sig['lower'], color='gray', ls=':', lw=1)
     if sig['type']=='BULL_CHOCH':
         ax.axhspan(sig['rangeBottom'], sig['rangeTop'], color='#089981', alpha=0.15)
-        ax.axhline(sig['eq'], color='#089981', ls='--', lw=1, label=f"EQ {sig['eq']:.5f}")
-        ax.axhspan(sig['fib_bot'], sig['fib_top'], color='#089981', alpha=0.35, label="Buy Zone 0.382-0.618")
-        rng = sig['rangeTop']-sig['rangeBottom']
-        ax.axhline(sig['rangeBottom']+rng*1.55, color='#089981', ls='--', alpha=0.5)
-        ax.axhline(sig['rangeBottom']+rng*2.68, color='#089981', ls='--', alpha=0.5)
+        ax.axhspan(sig['fib_bot'], sig['fib_top'], color='#089981', alpha=0.35)
     else:
         ax.axhspan(sig['rangeBottom'], sig['rangeTop'], color='#f23645', alpha=0.15)
-        ax.axhline(sig['eq'], color='#f23645', ls='--', lw=1, label=f"EQ {sig['eq']:.5f}")
-        ax.axhspan(sig['fib_bot'], sig['fib_top'], color='#f23645', alpha=0.35, label="Sell Zone 0.382-0.618")
-    
-    last_idx = len(view)-1
-    ax.scatter(last_idx, sig['price'], color='white', s=100, zorder=5)
-    ax.text(last_idx, sig['price'], f" {sig['type']}", color='white', weight='bold', fontsize=9)
-    ax.set_title(f"{sym} {tf} | {sig['type']} | Price {sig['price']:.6f} | PKT {datetime.now(PKT).strftime('%H:%M')}", color='white')
-    ax.legend(facecolor='black', labelcolor='white', fontsize=7)
+        ax.axhspan(sig['fib_bot'], sig['fib_top'], color='#f23645', alpha=0.35)
+    ax.set_title(f"{sym} 15m {sig['type']} {sig['price']:.6f} PKT {datetime.now(PKT).strftime('%H:%M')}", color='white')
     ax.grid(alpha=0.1)
     plt.tight_layout()
-    path=f"chart_{sym.replace('/','')}_{tf}.png"
+    path=f"chart_{sym.replace('/','')}_15m.png"
     plt.savefig(path,dpi=150,facecolor='black')
     plt.close()
     return path
@@ -196,32 +162,31 @@ hist=load_hist()
 syms=[s for s in exchange.markets if s.endswith('/USDT:USDT')]
 try:
     tickers=exchange.fetch_tickers()
-    syms=[s for s in syms if tickers.get(s,{}).get('quoteVolume',0)>400_000]
+    syms=[s for s in syms if tickers.get(s,{}).get('quoteVolume',0)>300_000]
 except: pass
-syms=syms[:120]
+syms=syms[:150]
 found=0
 now=datetime.now(PKT)
 
 for sym in syms:
-    if sym in hist and time.time()-hist[sym] < COOLDOWN*3600: continue
-    for tf in TIMEFRAMES:
-        df=fetch_tf(sym,tf)
-        if df is None or len(df)<100: continue
-        sig=detect_choch(df)
-        if not sig: continue
-        
-        chart=draw_choch(df,sym,tf,sig)
-        if 'BULL' in sig['type']:
-            cap=f"🟢 *{sig['type']}*\n\n*Pair:* {sym}\n*TF:* {tf} Previous Closed\n*CHoCH Price:* `{sig['price']:.6f}`\n*BLVL Break:* `{sig['upper']:.6f}`\n*EQ:* `{sig['eq']:.6f}`\n*Buy Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* Below `{sig['rangeBottom']:.6f}`\n*Target 1.55:* `{(sig['rangeBottom'] + (sig['rangeTop']-sig['rangeBottom'])*1.55):.6f}`\n*Time PKT:* {now.strftime('%Y-%m-%d %I:%M %p')}"
-        else:
-            cap=f"🔴 *{sig['type']}*\n\n*Pair:* {sym}\n*TF:* {tf} Previous Closed\n*CHoCH Price:* `{sig['price']:.6f}`\n*BLVL Break:* `{sig['lower']:.6f}`\n*EQ:* `{sig['eq']:.6f}`\n*Sell Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* Above `{sig['rangeTop']:.6f}`\n*Time PKT:* {now.strftime('%Y-%m-%d %I:%M %p')}"
-        
-        send_photo(chart,cap)
-        hist[sym]=time.time()
-        save_hist(hist)
-        found+=1
-        time.sleep(1)
-        break
+    if sym in hist and time.time()-hist[sym] < COOLDOWN*3600:
+        continue
+    df=fetch_15m(sym)
+    if df is None or len(df)<100: continue
+    sig=detect_choch(df)
+    if not sig: continue
+    
+    chart=draw_choch(df,sym,sig)
+    if 'BULL' in sig['type']:
+        cap=f"🟢 *{sig['type']}*\n\n*Pair:* {sym}\n*TF:* 15m CLOSED\n*Price:* `{sig['price']:.6f}`\n*BLVL:* `{sig['upper']:.6f}`\n*Buy Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeBottom']:.6f}`\n*Candle Close:* {now.strftime('%Y-%m-%d %I:%M %p')} PKT"
+    else:
+        cap=f"🔴 *{sig['type']}*\n\n*Pair:* {sym}\n*TF:* 15m CLOSED\n*Price:* `{sig['price']:.6f}`\n*BLVL:* `{sig['lower']:.6f}`\n*Sell Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Candle Close:* {now.strftime('%Y-%m-%d %I:%M %p')} PKT"
+    
+    send_photo(chart,cap)
+    hist[sym]=time.time()
+    save_hist(hist)
+    found+=1
+    time.sleep(1)
 
 if found==0:
-    send_msg("*please patience* No CHoCH 15m - Scan done")
+    print("No CHoCH on 15m closed candle")
