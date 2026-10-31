@@ -9,7 +9,7 @@ CHAT = os.getenv("CHAT_ID")
 PKT = pytz.timezone('Asia/Karachi')
 HIST_FILE = "alerts_history.json"
 FRACTAL_LEN = 5
-COOLDOWN = 2
+COOLDOWN = 24  # <-- CHANGED to 24h
 TOP_GAINERS = 40
 TIMEFRAMES = ['10m', '15m']
 SILENT = True
@@ -122,7 +122,6 @@ for exn,cls,opts in EXS:
             if g>-999: gainers.append((s,g))
         gainers.sort(key=lambda x:x[1],reverse=True)
         top=gainers[:TOP_GAINERS]
-        # FIXED LINE - no nested f-string bug
         top_display = []
         for s,c in top[:8]:
             coin = s.split('/')[0]
@@ -131,16 +130,26 @@ for exn,cls,opts in EXS:
         
         for sym,gain in top:
             if gain<1: continue
+            coin_name = sym.split('/')[0].upper()  # <-- ONLY COIN NAME
+            # CHECK 24h - if this coin already sent today, skip ALL exchanges and TFs
+            if coin_name in hist and time.time()-hist[coin_name]<COOLDOWN*3600:
+                continue
+
             for tf in TIMEFRAMES:
-                key=f"{exn}_{sym.split('/')[0]}_{tf}"
-                if key in hist and time.time()-hist[key]<COOLDOWN*3600: continue
                 df=fetch_tf(ex,sym,tf)
                 if df is None or len(df)<100: continue
                 sig=detect_bearish_choch(df)
                 if not sig: continue
                 chart,live=draw(df,sym,sig,exn,tf,gain)
                 cap=f"🔴 *BEAR CHoCH {tf} FUT PERP*\n\n*Pair:* `{sym}` | {exn}\n*48h:* `+{gain:.2f}%` TOP {TOP_GAINERS} FUTURES\n*Break:* `{sig['lower']:.6f}`\n*Sell Zone:* `{sig['fib_bot']:.6f}`-`{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Live:* `{live:.6f}`\n*Time:* {now.strftime('%H:%M PKT')} REAL-TIME"
-                send_photo(chart,cap); hist[key]=time.time(); save_hist(hist); found+=1; time.sleep(0.6)
+                send_photo(chart,cap)
+                hist[coin_name]=time.time()  # <-- SAVE ONLY COIN, NOT EXCHANGE
+                save_hist(hist)
+                found+=1
+                time.sleep(0.6)
+                break  # break TF loop after first found, don't send 10m AND 15m same coin
+            if coin_name in hist and time.time()-hist[coin_name]<60: 
+                continue  # already sent this coin in this run, skip other exchanges
     except Exception as e: print(f"{exn} {e}"); continue
 
 if found==0 and not SILENT: send_msg(f"No BEAR CHoCH TOP {TOP_GAINERS} FUT PERP 10m+15m")
