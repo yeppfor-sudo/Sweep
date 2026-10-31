@@ -10,8 +10,8 @@ PKT = pytz.timezone('Asia/Karachi')
 HIST_FILE = "alerts_history.json"
 FRACTAL_LEN = 5
 COOLDOWN = 24
-TOP_GAINERS = 40  # CHANGED TO 40
-TIMEFRAMES = ['10m','15m']  # 10m + 15m
+TOP_GAINERS = 40
+TIMEFRAMES = ['5m','15m']
 
 BLOCK_ALL = {'BTC','ETH','SOL','BNB','TRX','XRP','ADA','DOGE','AVAX','DOT','LINK','LTC','BCH','XLM','ETC','HBAR','APT','NEAR','UNI','FIL','ARB','OP','ATOM','MATIC','POL','TON','SHIB','PEPE','CRO','LEO','OKB','BGB','SUI','LDO','RNDR','TAO','FET','WIF','ENA','JUP','SEI','TIA','ONDO','W','PYTH','STRK','JTO','ENS'}
 
@@ -43,13 +43,10 @@ def is_pivot_low(df,i,l):
 
 def detect_bearish_choch_ema(df):
     if len(df)<80: return None
-    # EMA 12 20 FILTER
     df['ema12'] = df['c'].ewm(span=12, adjust=False).mean()
     df['ema20'] = df['c'].ewm(span=20, adjust=False).mean()
-    # must be bearish EMA: ema12 < ema20 on last candle
     if df['ema12'].iloc[-1] >= df['ema20'].iloc[-1]:
         return None
-
     upper=lower=None; direction=0; events=[]
     upB=lowB=False
     for i in range(FRACTAL_LEN,len(df)-1):
@@ -74,19 +71,18 @@ def draw(df,sym,sig,exn,tf,gain):
     for i,(_,r) in enumerate(view.iterrows()):
         col='#089981' if r['c']>=r['o'] else '#f23645'
         ax.plot([i,i],[r['l'],r['h']],color=col,lw=1); ax.plot([i,i],[r['o'],r['c']],color=col,lw=4)
-    # EMAs
     ax.plot(range(len(view)), view['ema12'].tail(80), color='#2962FF', lw=1.2, label='EMA12')
     ax.plot(range(len(view)), view['ema20'].tail(80), color='#FF6D00', lw=1.2, label='EMA20')
     ax.axhline(sig['lower'],color='white',ls='--',lw=1.2,label=f"BREAK {sig['lower']:.6f}")
     ax.axhspan(sig['fib_bot'],sig['fib_top'],color='#f23645',alpha=0.45,label="SELL ZONE")
     ax.axhline(live,color='yellow',lw=1.2,label=f"LIVE {live:.6f}")
-    ax.set_title(f"{sym} {exn} {tf} BEAR CHoCH + EMA12<20 | LIVE +{gain:.1f}%",color='white',fontweight='bold')
+    ax.set_title(f"{sym} {exn} {tf} BEAR CHoCH EMA12<20 | LIVE +{gain:.1f}%",color='white',fontweight='bold')
     ax.legend(facecolor='black',labelcolor='white',fontsize=7); ax.grid(alpha=0.15); plt.tight_layout()
     p=f"chart_{sym.replace('/','').replace(':','')}_{tf}.png"; plt.savefig(p,dpi=150,facecolor='black'); plt.close(); return p,live
 
 hist=load_hist()
 now=datetime.now(PKT)
-print(f"Scan Started 24h LIVE TOP40 >15% | 10m 15m EMA12/20 | Block 24h | {now.strftime('%H:%M PKT')}", flush=True)
+print(f"Scan Started 24h LIVE TOP40 >15% | 5m 15m EMA12/20 | Block 24h | {now.strftime('%H:%M PKT')}", flush=True)
 
 ex=ccxt.mexc({'enableRateLimit':True,'options':{'defaultType':'swap'}})
 ex.load_markets()
@@ -101,7 +97,7 @@ for sym,t in tickers.items():
         if ch is None:
             ch = t.get('info',{}).get('riseFallRate')
             if ch: ch=float(ch)*100
-        if ch is None or ch < 15: continue  # LIVE >15%
+        if ch is None or ch < 15: continue
         vol = t.get('quoteVolume',0) or 0
         if vol < 50000: continue
         gainers.append((sym,float(ch)))
@@ -125,7 +121,7 @@ for sym,gain in top:
             sig=detect_bearish_choch_ema(df)
             if not sig: continue
             chart,live=draw(df,sym,sig,'MEXC',tf,gain)
-            cap=f"🔴 *BEAR CHoCH {tf} + EMA12<20*\n\n*Pair:* `{sym}` | MEXC\n*24h LIVE:* `+{gain:.2f}%` - TOP40\n*EMA:* 12 `{sig['ema12']:.6f}` < 20 `{sig['ema20']:.6f}` BEARISH\n*Break:* `{sig['lower']:.6f}`\n*Short:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Live:* `{live:.6f}`\n*Time:* {now.strftime('%H:%M PKT')}"
+            cap=f"🔴 *BEAR CHoCH {tf} + EMA12<20 - TOP40*\n*Pair:* `{sym}` | MEXC\n*24h LIVE:* `+{gain:.2f}%`\n*EMA12* `{sig['ema12']:.6f}` < *EMA20* `{sig['ema20']:.6f}` ✅\n*Break:* `{sig['lower']:.6f}`\n*Short:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*Live:* `{live:.6f}`\n*Time:* {now.strftime('%H:%M PKT')}"
             send_photo(chart,cap)
             hist[coin]=time.time()
             save_hist(hist)
@@ -133,11 +129,7 @@ for sym,gain in top:
             print(f"ALERT {coin} {tf} +{gain:.1f}% EMA", flush=True)
             break
         except Exception as e:
-            # Skip Parameter error for 10m on new coins
-            if '600' in str(e) or 'Parameter error' in str(e):
-                print(f"Skip {coin} {tf} - no {tf} data", flush=True)
-                continue
-            print(f"err {coin} {e}", flush=True)
+            print(f"err {coin} {tf} {e}", flush=True)
             continue
 
-print(f"Done. Found {found} | TOP40 LIVE >15% 10m 15m EMA12/20", flush=True)
+print(f"Done. Found {found} | TOP40 LIVE >15% 5m 15m EMA12/20", flush=True)
