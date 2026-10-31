@@ -8,10 +8,10 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT = os.getenv("CHAT_ID")
 PKT = pytz.timezone('Asia/Karachi')
 HIST_FILE = "alerts_history.json"
-FRACTAL_LEN = 5  # early detection
-COOLDOWN = 24    # 1 pair once per 24h
+FRACTAL_LEN = 5
+COOLDOWN = 24
 TOP_GAINERS = 30
-TIMEFRAMES = ['5m','10m','15m']  # 5m earliest at peak
+TIMEFRAMES = ['5m','10m','15m']
 
 BLOCK_ALL = {'BTC','ETH','SOL','BNB','TRX','XRP','ADA','DOGE','AVAX','DOT','LINK','LTC','BCH','XLM','ETC','HBAR','APT','NEAR','UNI','FIL','ARB','OP','ATOM','MATIC','POL','TON','SHIB','PEPE','CRO','LEO','OKB','BGB','SUI','LDO','RNDR','TAO','FET','WIF','ENA','JUP','SEI','TIA','ONDO','W','PYTH','STRK','JTO','ENS'}
 
@@ -63,7 +63,6 @@ def detect_bearish_choch_early(df):
             direction=-1
         if not upB and c>upper and pc<=upper: upB=True; direction=1
     if not events: return None
-    # Alert if CHoCH in last 5 candles = at PEAK
     if events[-1]['bar'] < len(df)-6: return None
     return events[-1]
 
@@ -97,21 +96,20 @@ for sym,t in tickers.items():
         if ch is None:
             ch = t.get('info',{}).get('riseFallRate')
             if ch: ch=float(ch)*100
-        if ch is None or ch < 20: continue
+        if ch is None or ch < 15: continue
         vol = t.get('quoteVolume',0) or 0
-        if vol < 50000: continue
+        if vol < 30000: continue
         gainers.append((sym,float(ch)))
     except: continue
 
 gainers.sort(key=lambda x:x[1],reverse=True)
 top=gainers[:TOP_GAINERS]
 
-# Fixed f-string bug
 top_list=[]
 for s,c in top[:10]:
     coin=s.split('/')[0]
     top_list.append(f"{coin} {c:.1f}%")
-print(f"LIVE TOP {TOP_GAINERS}: {top_list}", flush=True)
+print(f"LIVE TOP {TOP_GAINERS} (>15%): {top_list}", flush=True)
 
 found=0
 for sym,gain in top:
@@ -138,4 +136,4 @@ for sym,gain in top:
             print(f"err {coin} {e}", flush=True)
             continue
 
-print(f"Done. Found {found} | 32s run ok", flush=True)
+print(f"Done. Found {found}", flush=True)
