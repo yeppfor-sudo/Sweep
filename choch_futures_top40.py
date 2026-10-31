@@ -9,7 +9,7 @@ CHAT = os.getenv("CHAT_ID")
 PKT = pytz.timezone('Asia/Karachi')
 HIST_FILE = "alerts_history.json"
 FRACTAL_LEN = 5
-COOLDOWN = 24
+COOLDOWN = 48  # CHANGED 48h
 TOP_GAINERS = 30
 TIMEFRAMES = ['5m','10m','15m']
 
@@ -75,13 +75,13 @@ def draw(df,sym,sig,exn,tf,gain):
     ax.axhline(sig['lower'],color='white',ls='--',lw=1.2,label=f"BREAK {sig['lower']:.6f}")
     ax.axhspan(sig['fib_bot'],sig['fib_top'],color='#f23645',alpha=0.45,label="SELL ZONE")
     ax.axhline(live,color='yellow',lw=1.2,label=f"LIVE {live:.6f}")
-    ax.set_title(f"{sym} {exn} {tf} EARLY CHoCH | LIVE +{gain:.1f}% TOP",color='white',fontweight='bold')
+    ax.set_title(f"{sym} {exn} {tf} EARLY CHoCH | LIVE +{gain:.1f}% TOP | 48h 1x",color='white',fontweight='bold')
     ax.legend(facecolor='black',labelcolor='white',fontsize=7); ax.grid(alpha=0.15); plt.tight_layout()
     p=f"chart_{sym.replace('/','').replace(':','')}_{tf}.png"; plt.savefig(p,dpi=150,facecolor='black'); plt.close(); return p,live
 
 hist=load_hist()
 now=datetime.now(PKT)
-print(f"Scan Started EARLY TOP {TOP_GAINERS} | {now.strftime('%H:%M PKT')}", flush=True)
+print(f"Scan Started EARLY TOP {TOP_GAINERS} | 48h cooldown | {now.strftime('%H:%M PKT')}", flush=True)
 
 ex=ccxt.mexc({'enableRateLimit':True,'options':{'defaultType':'swap'}})
 ex.load_markets()
@@ -115,7 +115,8 @@ found=0
 for sym,gain in top:
     coin = sym.split('/')[0].upper()
     if coin in hist and time.time()-hist[coin] < COOLDOWN*3600:
-        print(f"Skip {coin} - sent in 24h", flush=True)
+        hrs = (COOLDOWN*3600 - (time.time()-hist[coin]))/3600
+        print(f"Skip {coin} - sent {hrs:.1f}h ago, cooldown 48h", flush=True)
         continue
     for tf in TIMEFRAMES:
         try:
@@ -125,7 +126,7 @@ for sym,gain in top:
             sig=detect_bearish_choch_early(df)
             if not sig: continue
             chart,live=draw(df,sym,sig,'MEXC',tf,gain)
-            cap=f"🔴 *BEAR CHoCH EARLY {tf} - TOP GAINER*\n\n*Pair:* `{sym}` | MEXC\n*24h LIVE:* `+{gain:.2f}%` - AT PEAK\n*Break:* `{sig['lower']:.6f}`\n*Short Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Live:* `{live:.6f}`\n*Time:* {now.strftime('%H:%M PKT')}\n\n⚠️ *Peak area signal*"
+            cap=f"🔴 *BEAR CHoCH EARLY {tf} - TOP GAINER*\n\n*Pair:* `{sym}` | MEXC\n*24h LIVE:* `+{gain:.2f}%` - AT PEAK\n*Break:* `{sig['lower']:.6f}`\n*Short Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Live:* `{live:.6f}`\n*Time:* {now.strftime('%H:%M PKT')}\n*Cooldown: 48h 1x*\n\n⚠️ *Peak area signal*"
             send_photo(chart,cap)
             hist[coin]=time.time()
             save_hist(hist)
