@@ -9,7 +9,7 @@ CHAT = os.getenv("CHAT_ID")
 PKT = pytz.timezone('Asia/Karachi')
 HIST_FILE = "alerts_history.json"
 FRACTAL_LEN = 5
-COOLDOWN = 48  # CHANGED 48h
+COOLDOWN = 24  # BLOCK SPAM 24h
 TOP_GAINERS = 30
 TIMEFRAMES = ['5m','10m','15m']
 
@@ -66,7 +66,7 @@ def detect_bearish_choch_early(df):
     if events[-1]['bar'] < len(df)-6: return None
     return events[-1]
 
-def draw(df,sym,sig,exn,tf,gain):
+def draw(df,sym,sig,exn,tf,gain48):
     fig,ax=plt.subplots(figsize=(14,6),facecolor='black'); ax.set_facecolor('black')
     view=df.tail(80); live=float(view['c'].iloc[-1])
     for i,(_,r) in enumerate(view.iterrows()):
@@ -75,66 +75,68 @@ def draw(df,sym,sig,exn,tf,gain):
     ax.axhline(sig['lower'],color='white',ls='--',lw=1.2,label=f"BREAK {sig['lower']:.6f}")
     ax.axhspan(sig['fib_bot'],sig['fib_top'],color='#f23645',alpha=0.45,label="SELL ZONE")
     ax.axhline(live,color='yellow',lw=1.2,label=f"LIVE {live:.6f}")
-    ax.set_title(f"{sym} {exn} {tf} EARLY CHoCH | LIVE +{gain:.1f}% TOP | 48h 1x",color='white',fontweight='bold')
+    ax.set_title(f"{sym} {exn} {tf} EARLY CHoCH | LIVE 48h +{gain48:.1f}% | 24h block",color='white',fontweight='bold')
     ax.legend(facecolor='black',labelcolor='white',fontsize=7); ax.grid(alpha=0.15); plt.tight_layout()
     p=f"chart_{sym.replace('/','').replace(':','')}_{tf}.png"; plt.savefig(p,dpi=150,facecolor='black'); plt.close(); return p,live
 
 hist=load_hist()
 now=datetime.now(PKT)
-print(f"Scan Started EARLY TOP {TOP_GAINERS} | 48h cooldown | {now.strftime('%H:%M PKT')}", flush=True)
+print(f"Scan Started LAST 48h LIVE >15% | Block 24h | {now.strftime('%H:%M PKT')}", flush=True)
 
 ex=ccxt.mexc({'enableRateLimit':True,'options':{'defaultType':'swap'}})
 ex.load_markets()
 tickers = ex.fetch_tickers()
-print(f"Got {len(tickers)} tickers", flush=True)
+valid_syms = [s for s in tickers if is_valid_crypto(s)]
+print(f"Valid: {len(valid_syms)}", flush=True)
 
-gainers=[]
-for sym,t in tickers.items():
-    if not is_valid_crypto(sym): continue
+gainers48=[]
+for sym in valid_syms:
     try:
-        ch = t.get('percentage')
-        if ch is None:
-            ch = t.get('info',{}).get('riseFallRate')
-            if ch: ch=float(ch)*100
-        if ch is None or ch < 15: continue
+        t = tickers.get(sym,{})
+        last_price = t.get('last') or t.get('close')
+        if not last_price: continue
         vol = t.get('quoteVolume',0) or 0
         if vol < 30000: continue
-        gainers.append((sym,float(ch)))
-    except: continue
+        # 48h LIVE gain = live price / close 2 days ago
+        ohlcv = ex.fetch_ohlcv(sym, '1d', limit=3)
+        if len(ohlcv)<3: continue
+        close_2d_ago = float(ohlcv[-3][4])
+        if close_2d_ago==0: continue
+        gain48_live = (float(last_price) / close_2d_ago - 1) * 100
+        if gain48_live < 15: continue
+        gainers48.append((sym, gain48_live))
+    except:
+        continue
 
-gainers.sort(key=lambda x:x[1],reverse=True)
-top=gainers[:TOP_GAINERS]
+gainers48.sort(key=lambda x:x[1],reverse=True)
+top=gainers48[:TOP_GAINERS]
 
-top_list=[]
-for s,c in top[:10]:
-    coin=s.split('/')[0]
-    top_list.append(f"{coin} {c:.1f}%")
-print(f"LIVE TOP {TOP_GAINERS} (>15%): {top_list}", flush=True)
+top_list=[f"{s.split('/')[0]} {c:.1f}%" for s,c in top[:10]]
+print(f"LAST 48h LIVE TOP {TOP_GAINERS} (>15%): {top_list}", flush=True)
 
 found=0
-for sym,gain in top:
+for sym,gain48 in top:
     coin = sym.split('/')[0].upper()
     if coin in hist and time.time()-hist[coin] < COOLDOWN*3600:
-        hrs = (COOLDOWN*3600 - (time.time()-hist[coin]))/3600
-        print(f"Skip {coin} - sent {hrs:.1f}h ago, cooldown 48h", flush=True)
+        print(f"Skip {coin} - 24h block", flush=True)
         continue
     for tf in TIMEFRAMES:
         try:
-            print(f"Checking {coin} {tf} +{gain:.1f}%", flush=True)
+            print(f"Checking {coin} {tf} LIVE48h +{gain48:.1f}%", flush=True)
             ohlcv=ex.fetch_ohlcv(sym,tf,limit=300)
             df=pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
             sig=detect_bearish_choch_early(df)
             if not sig: continue
-            chart,live=draw(df,sym,sig,'MEXC',tf,gain)
-            cap=f"🔴 *BEAR CHoCH EARLY {tf} - TOP GAINER*\n\n*Pair:* `{sym}` | MEXC\n*24h LIVE:* `+{gain:.2f}%` - AT PEAK\n*Break:* `{sig['lower']:.6f}`\n*Short Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Live:* `{live:.6f}`\n*Time:* {now.strftime('%H:%M PKT')}\n*Cooldown: 48h 1x*\n\n⚠️ *Peak area signal*"
+            chart,live=draw(df,sym,sig,'MEXC',tf,gain48)
+            cap=f"🔴 *BEAR CHoCH EARLY {tf} - LAST 48h LIVE TOP*\n\n*Pair:* `{sym}` | MEXC\n*LIVE 48h:* `+{gain48:.2f}%` (>15%)\n*Break:* `{sig['lower']:.6f}`\n*Short Zone:* `{sig['fib_bot']:.6f}` - `{sig['fib_top']:.6f}`\n*SL:* `{sig['rangeTop']:.6f}`\n*Live:* `{live:.6f}`\n*Time:* {now.strftime('%H:%M PKT')}\n*Block 24h 1x*"
             send_photo(chart,cap)
             hist[coin]=time.time()
             save_hist(hist)
             found+=1
-            print(f"ALERT SENT {coin} EARLY", flush=True)
+            print(f"ALERT {coin} LIVE48h +{gain48:.1f}%", flush=True)
             break
         except Exception as e:
             print(f"err {coin} {e}", flush=True)
             continue
 
-print(f"Done. Found {found}", flush=True)
+print(f"Done. Found {found} | LAST 48h LIVE >15%", flush=True)
