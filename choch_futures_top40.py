@@ -14,12 +14,11 @@ TOP_GAINERS = 40
 TIMEFRAMES = ['10m', '15m']
 SILENT = True
 
-# BLOCK - No BTC ETH etc + No Stock Metal
 BLOCK = {'BTC','ETH','SOL','BNB','TRX','XRP','ADA','DOGE','AVAX','DOT','LINK','LTC','BCH','XLM','ETC','HBAR','APT','NEAR','UNI','FIL','ARB','OP','ATOM','MATIC','POL','TON','SHIB','PEPE','CRO','LEO','OKB','BGB','SUI','LDO','RNDR','TAO','FET','WIF','ENA','JUP','SEI','TIA','ONDO','W','PYTH','STRK','JTO','ENS','GOLD','SILVER','XAU','XAG','PAXG','OIL','STOCK','ETF','USDC','FDUSD','TRY','EUR','JPY'}
 
 def is_futures_perp_crypto(sym):
-    if not sym.endswith('USDT:USDT'): return False  # FUTURES PERP ONLY
-    base=sym.split('/')[0].upper()
+    if not sym.endswith('USDT:USDT'): return False
+    base = sym.split('/')[0].upper()
     if base in BLOCK: return False
     if any(x in sym for x in ['STOCK','ETF','GOLD','SILVER','OIL','XAU','XAG','PAXG','EUR','TRY','JPY']): return False
     if len(base)<2 or len(base)>8: return False
@@ -58,7 +57,7 @@ def is_pivot_low(df,i,l):
 
 def detect_bearish_choch(df):
     if len(df)<100: return None
-    upper=lower=None; dir=0; events=[]
+    upper=lower=None; direction=0; events=[]
     upB=lowB=False
     for i in range(FRACTAL_LEN,len(df)-1):
         if is_pivot_high(df,i,FRACTAL_LEN): upper=float(df['h'].iloc[i]); upB=False
@@ -67,10 +66,11 @@ def detect_bearish_choch(df):
         c=float(df['c'].iloc[i]); pc=float(df['c'].iloc[i-1])
         if not lowB and c<lower and pc>=lower:
             lowB=True
-            if dir==1:
-                events.append({'price':c,'upper':upper,'lower':lower,'rangeTop':upper,'rangeBottom':float(df['l'].iloc[i]),'fib_top':upper-(upper-float(df['l'].iloc[i]))*0.382,'fib_bot':upper-(upper-float(df['l'].iloc[i]))*0.618,'bar':i,'eq':(upper+float(df['l'].iloc[i]))/2})
-            dir=-1
-        if not upB and c>upper and pc<=upper: upB=True; dir=1
+            if direction==1:
+                lb=float(df['l'].iloc[i])
+                events.append({'price':c,'upper':upper,'lower':lower,'rangeTop':upper,'rangeBottom':lb,'fib_top':upper-(upper-lb)*0.382,'fib_bot':upper-(upper-lb)*0.618,'bar':i,'eq':(upper+lb)/2})
+            direction=-1
+        if not upB and c>upper and pc<=upper: upB=True; direction=1
     if not events: return None
     if events[-1]['bar']<len(df)-4: return None
     return events[-1]
@@ -102,7 +102,6 @@ def draw(df,sym,sig,exn,tf,gain):
     ax.legend(facecolor='black',labelcolor='white',fontsize=7); ax.grid(alpha=0.15); plt.tight_layout()
     p=f"chart_{sym.replace('/','').replace(':','')}_{tf}.png"; plt.savefig(p,dpi=150,facecolor='black'); plt.close(); return p,live
 
-# ONLY FUTURES EXCHANGES - PERP MARKETS
 EXS=[
     ('MEXC',ccxt.mexc,{'enableRateLimit':True,'options':{'defaultType':'swap'}}),
     ('BINANCE',ccxt.binanceusdm,{'enableRateLimit':True}),
@@ -123,7 +122,13 @@ for exn,cls,opts in EXS:
             if g>-999: gainers.append((s,g))
         gainers.sort(key=lambda x:x[1],reverse=True)
         top=gainers[:TOP_GAINERS]
-        print(f"{exn} FUT PERP TOP {TOP_GAINERS}: {[f'{s.split('/')[0]} {c:.1f}%' for s,c in top[:8]]}")
+        # FIXED LINE - no nested f-string bug
+        top_display = []
+        for s,c in top[:8]:
+            coin = s.split('/')[0]
+            top_display.append(f"{coin} {c:.1f}%")
+        print(f"{exn} FUT PERP TOP {TOP_GAINERS}: {top_display}")
+        
         for sym,gain in top:
             if gain<1: continue
             for tf in TIMEFRAMES:
